@@ -1,121 +1,59 @@
 
+export FIRST_PROJECT_ID=$DEVSHELL_PROJECT_ID
 
+export REGION_1="${ZONE_1%-*}"
 
-gcloud iam service-accounts create my-sa-123 \
-    --display-name "My Service Account"
-
-
-gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
-    --member="serviceAccount:my-sa-123@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/editor"
-
-
-#TASK 2
-
-gcloud iam service-accounts create bigquery-qwiklabs \
-    --description="Service account for BigQuery access" \
-    --display-name="bigquery-qwiklabs"
-
-
-gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
-    --member="serviceAccount:bigquery-qwiklabs@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.dataViewer"
-
-
-gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
-    --member="serviceAccount:bigquery-qwiklabs@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.user"
+export REGION_2="${ZONE_2%-*}"
 
 
 
-gcloud iam service-accounts delete bigquery-qwiklabs@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --quiet
+gcloud config set project $FIRST_PROJECT_ID
 
 
-gcloud iam service-accounts create bigquery-qwiklab \
-    --description="Service account for BigQuery access" \
-    --display-name="bigquery-qwiklab"
+gcloud compute networks create network-a --subnet-mode custom
 
+gcloud compute networks subnets create network-a-subnet --network network-a \
+    --range 10.0.0.0/16 --region $REGION_1
 
-gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
-    --member="serviceAccount:bigquery-qwiklab@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.dataViewer"
+gcloud compute instances create vm-a --zone $ZONE_1 --network network-a --subnet network-a-subnet --machine-type e2-small
 
-gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID \
-    --member="serviceAccount:bigquery-qwiklab@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.user"
-
-
-sleep 20
-
-gcloud compute instances create bigquery-instance \
-    --project=$DEVSHELL_PROJECT_ID \
-    --zone=$ZONE \
-    --machine-type=e2-medium \
-    --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
-    --metadata=enable-oslogin=true \
-    --maintenance-policy=MIGRATE \
-    --provisioning-model=STANDARD \
-    --service-account=bigquery-qwiklab@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com \
-    --scopes=https://www.googleapis.com/auth/bigquery,https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
-    --create-disk=auto-delete=yes,boot=yes,device-name=bigquery-instance,image=projects/debian-cloud/global/images/debian-12-bookworm-v20260915,mode=rw,size=10,type=pd-balanced \
-    --no-shielded-secure-boot \
-    --shielded-vtpm \
-    --shielded-integrity-monitoring \
-    --labels=goog-ec-src=vm_add-gcloud \
-    --reservation-affinity=any
+gcloud compute firewall-rules create network-a-fw --network network-a --allow tcp:22,icmp
 
 
 
 
 
-cat > prepare_disk.sh <<'EOF_END'
-sudo apt-get update
-sudo apt-get install -y git python3-pip
-pip3 install --upgrade pip
-pip3 install google-cloud-bigquery
-pip3 install pyarrow
-pip3 install pandas
-pip3 install db-dtypes
-echo "
-from google.auth import compute_engine
-from google.cloud import bigquery
+# Switch to the second project
+gcloud config set project $SECOND_PROJECT_ID
 
-credentials = compute_engine.Credentials(
-    service_account_email='YOUR_SERVICE_ACCOUNT')
+# Create the custom network
+gcloud compute networks create network-b --subnet-mode custom
 
-query = '''
-SELECT
-  year,
-  COUNT(1) as num_babies
-FROM
-  publicdata.samples.natality
-WHERE
-  year > 2000
-GROUP BY
-  year
-'''
+# Create the subnet within this VPC
+gcloud compute networks subnets create network-b-subnet --network network-b \
+    --range 10.8.0.0/16 --region $REGION_2
 
-client = bigquery.Client(
-    project='qwiklabs-gcp-04-f1845f5296f7',
-    credentials=credentials)
-print(client.query(query).to_dataframe())
-" > query.py
+# Create the VM instance
+gcloud compute instances create vm-b --zone $ZONE_2 --network network-b --subnet network-b-subnet --machine-type e2-small
 
-sed -i -e "s/qwiklabs-gcp-04-f1845f5296f7/$(gcloud config get-value project)/g" query.py
-sed -i -e "s/YOUR_SERVICE_ACCOUNT/bigquery-qwiklab@$(gcloud config get-value project).iam.gserviceaccount.com/g" query.py
-python3 query.py
-EOF_END
+# Enable SSH and ICMP firewall rules
+gcloud compute firewall-rules create network-b-fw --network network-b --allow tcp:22,icmp
 
 
-# Copy the environment variables script to the VM
+gcloud config set project $FIRST_PROJECT_ID
 
-# Copy the prepare_disk.sh script to the VM
-gcloud compute scp prepare_disk.sh bigquery-instance:/tmp --project=$DEVSHELL_PROJECT_ID --zone=$ZONE --quiet
 
-# SSH into the VM and execute the script
-gcloud compute ssh bigquery-instance --project=$DEVSHELL_PROJECT_ID --zone=$ZONE --quiet --command="bash /tmp/prepare_disk.sh"
-# Copy the prepare_disk.sh script to the VM
-gcloud compute scp prepare_disk.sh bigquery-instance:/tmp --project=$DEVSHELL_PROJECT_ID --zone=$ZONE --quiet
+gcloud compute networks peerings create peer-ab \
+    --network=network-a \
+    --peer-project=$SECOND_PROJECT_ID \
+    --peer-network=network-b 
 
-# SSH into the VM and execute the script
-gcloud compute ssh bigquery-instance --project=$DEVSHELL_PROJECT_ID --zone=$ZONE --quiet --command="bash /tmp/prepare_disk.sh"
+
+gcloud config set project $SECOND_PROJECT_ID
+
+
+
+gcloud compute networks peerings create peer-ba \
+    --network=network-b \
+    --peer-project=$FIRST_PROJECT_ID \
+    --peer-network=network-a
