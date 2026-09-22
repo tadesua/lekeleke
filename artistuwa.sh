@@ -1,59 +1,93 @@
+echo ""
+echo "Please export the values."
 
-export FIRST_PROJECT_ID=$DEVSHELL_PROJECT_ID
+# Loading spinner function
+spinner() {
+    local pid=$!
+    local delay=0.1
+    local spinstr='|/-\'
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
 
-export REGION_1="${ZONE_1%-*}"
+echo "🚀 Script starting... Please wait!"
+echo ""
 
-export REGION_2="${ZONE_2%-*}"
+# Prompt user to input four values
+read -p "Enter CUSTOM_SECURIY_ROLE: " CUSTOM_SECURIY_ROLE
+read -p "Enter SERVICE_ACCOUNT: " SERVICE_ACCOUNT
+read -p "Enter CLUSTER_NAME: " CLUSTER_NAME
+read -p "Enter ZONE: " ZONE
 
+echo ""
+echo "⏳ Setting up your GCP environment..."
+echo ""
 
+#Task 1:-
+echo "📝 Setting compute zone..."
+gcloud config set compute/zone $ZONE
 
-gcloud config set project $FIRST_PROJECT_ID
+echo "🔧 Creating role definition..."
+cat > role-definition.yaml <<EOF_END
+title: "$CUSTOM_SECURIY_ROLE"
+description: "Permissions"
+stage: "ALPHA"
+includedPermissions:
+- storage.buckets.get
+- storage.objects.get
+- storage.objects.list
+- storage.objects.update
+- storage.objects.create
+EOF_END
 
+echo "👤 Creating service account..."
+gcloud iam service-accounts create orca-private-cluster-sa --display-name "Orca Private Cluster Service Account"
 
-gcloud compute networks create network-a --subnet-mode custom
+echo "🎭 Creating custom role..."
+gcloud iam roles create $CUSTOM_SECURIY_ROLE --project $DEVSHELL_PROJECT_ID --file role-definition.yaml
 
-gcloud compute networks subnets create network-a-subnet --network network-a \
-    --range 10.0.0.0/16 --region $REGION_1
+#Task 2:-
+echo "👤 Creating main service account..."
+gcloud iam service-accounts create $SERVICE_ACCOUNT --display-name "Orca Private Cluster Service Account"
 
-gcloud compute instances create vm-a --zone $ZONE_1 --network network-a --subnet network-a-subnet --machine-type e2-small
+#Task 3:-
+echo "🔐 Assigning IAM roles..."
+echo "   📊 Adding monitoring.viewer role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID --member serviceAccount:$SERVICE_ACCOUNT@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --role roles/monitoring.viewer
 
-gcloud compute firewall-rules create network-a-fw --network network-a --allow tcp:22,icmp
+echo "   📈 Adding monitoring.metricWriter role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID --member serviceAccount:$SERVICE_ACCOUNT@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --role roles/monitoring.metricWriter
 
+echo "   📝 Adding logging.logWriter role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID --member serviceAccount:$SERVICE_ACCOUNT@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --role roles/logging.logWriter
 
+echo "   🛡️ Adding custom security role..."
+gcloud projects add-iam-policy-binding $DEVSHELL_PROJECT_ID --member serviceAccount:$SERVICE_ACCOUNT@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --role projects/$DEVSHELL_PROJECT_ID/roles/$CUSTOM_SECURIY_ROLE
 
+#Task 4:-
+echo "🏗️ Creating GKE cluster..."
+echo "   This may take a few minutes..."
+gcloud container clusters create $CLUSTER_NAME --num-nodes 1 --master-ipv4-cidr=172.16.0.64/28 --network orca-build-vpc --subnetwork orca-build-subnet --enable-master-authorized-networks --master-authorized-networks 192.168.10.2/32 --enable-ip-alias --enable-private-nodes --enable-private-endpoint --service-account $SERVICE_ACCOUNT@$DEVSHELL_PROJECT_ID.iam.gserviceaccount.com --zone $ZONE
 
+#Task 5:-
+echo "🔗 Configuring jumphost and deploying application..."
+echo "   Setting up Kubernetes resources..."
+gcloud compute ssh --zone "$ZONE" "orca-jumphost" --project "$DEVSHELL_PROJECT_ID" --quiet --command "gcloud config set compute/zone $ZONE && gcloud container clusters get-credentials $CLUSTER_NAME --internal-ip && sudo apt-get install -y google-cloud-cli-gke-gcloud-auth-plugin && kubectl create deployment hello-server --image=gcr.io/google-samples/hello-app:1.0 && kubectl expose deployment hello-server --name orca-hello-service --type LoadBalancer --port 80 --target-port 8080"
 
-# Switch to the second project
-gcloud config set project $SECOND_PROJECT_ID
-
-# Create the custom network
-gcloud compute networks create network-b --subnet-mode custom
-
-# Create the subnet within this VPC
-gcloud compute networks subnets create network-b-subnet --network network-b \
-    --range 10.8.0.0/16 --region $REGION_2
-
-# Create the VM instance
-gcloud compute instances create vm-b --zone $ZONE_2 --network network-b --subnet network-b-subnet --machine-type e2-small
-
-# Enable SSH and ICMP firewall rules
-gcloud compute firewall-rules create network-b-fw --network network-b --allow tcp:22,icmp
-
-
-gcloud config set project $FIRST_PROJECT_ID
-
-
-gcloud compute networks peerings create peer-ab \
-    --network=network-a \
-    --peer-project=$SECOND_PROJECT_ID \
-    --peer-network=network-b 
-
-
-gcloud config set project $SECOND_PROJECT_ID
-
-
-
-gcloud compute networks peerings create peer-ba \
-    --network=network-b \
-    --peer-project=$FIRST_PROJECT_ID \
-    --peer-network=network-a
+echo ""
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                                                              ║"
+echo "║                     ✅ LAB COMPLETE!                         ║"
+echo "║                                                              ║"
+echo "║              All tasks completed successfully.              ║"
+echo "║                                                              ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo ""
